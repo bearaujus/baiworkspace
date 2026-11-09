@@ -21,11 +21,18 @@ python3 bai.py tools run my-tool --profile dev -- --input /path/to/input.csv
 ```
 
 The manifest declares version, ID, description, keywords, relative entry point,
-runtime (`python` or `executable`), fixed arguments, executable dependencies,
+runtime (`python`, `executable` or `command`), fixed arguments, executable dependencies,
 inputs/outputs, effects, required credential key descriptions, verification and
 recovery. Values never belong in the `secrets` mapping. A `repo` ID resolves the
 entry relative to a registered external repo; otherwise it is clone-relative.
 Built-in examples are framework-relative and cannot be shadowed by local tools.
+
+For native commands such as Go or Make, use `runtime: "command"`, `entry: "go"`
+and an argument array such as `["run", ".", "--dry-run"]`. The executable is
+resolved through PATH. An optional relative `cwd` selects the command's working
+directory inside its registered repo. Optional `environment` entries hold explicit
+non-secret settings such as `GOTOOLCHAIN=local`; credential keys stay in `secrets`.
+Settings and credential names cannot overlap. No shell interpolation occurs.
 
 Classify effects conservatively: `read-only`, `local-write` or `external-write`.
 External-write tools require `--execute`, supplied only when the current task
@@ -49,7 +56,10 @@ profile are passed. Existing CLI login/config files may still be accessible thro
 the user's home directory. This runner is not a sandbox. Ambient credential and
 proxy environment variables are not automatically inherited.
 
-Tool stdin is closed. Keep interactive setup separate and user-operated. Stdout and
+Tool stdin is closed unless the caller provides an explicit `--stdin-file` before
+the `--` argument separator. This supports reusable JSON/CSV filters without
+putting their input in the conversation. Keep interactive setup separate and
+user-operated. Stdout and
 stderr are captured privately, known injected secrets and their URL-encoded forms
 are redacted, and output is limited to 1 MiB per stream. Temporary capture files
 are removed on close; abrupt OS termination may leave OS-managed temporary data.

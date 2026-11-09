@@ -86,7 +86,7 @@ Memories have kind (`learning`, `system`, `procedure`, `preference`), status
 (`current`, `uncertain`, `superseded`), provenance, sources, related `links`,
 `supersedes` IDs and directed relationships. Relationship endpoints must be listed
 in the memory's repo IDs. Provenance is `user-stated`, `source-verified`,
-`runtime-observed` or `inference`.
+`runtime-observed`, `inference` or `historical-record`.
 
 Use `uncertain` for unresolved claims. Describe verification limits in the narrative.
 A structural check cannot establish truth, current deployment or authorization.
@@ -114,3 +114,23 @@ The workspace uses a short-lived write lock and expected record revisions. If a
 process crashes, verify it has stopped before manually removing `.bai/write.lock`.
 Do not remove a live writer's lock. Direct Markdown edits remain possible; review
 hashes reveal changes since the last checkpoint.
+
+## Historical workspace imports
+
+Imported records may set `historical: true` and an `origin` object containing the
+original source/date and import time. Preserve unknown/waiting outcomes and old
+verification limits. Do not stamp a historical import as newly verified merely to
+clear health warnings. `status` focuses on current tasks; `--include-historical`
+includes old unfinished records. `memory review --include-historical` expands the
+on-use historical review queue. Normal doctor output reports that queue as counts.
+
+Keep ongoing umbrella tasks separate from their historical completed subtasks.
+Context reserves early slots for current handoffs, system maps and reusable tools;
+historical tasks come afterward. Review an imported reference when it becomes
+relevant and update its current summary/provenance only after actual evidence review.
+
+Explicit `evidence:relative/path` sources address preserved files under
+`.bai/artifacts/`. They are hashed during explicit review but never added to search
+content. This supports self-contained migration while keeping raw evidence out of
+normal agent context. Credential file names, private directories and traversal are
+still rejected. Preserving evidence is not permission to execute old commands.

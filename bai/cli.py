@@ -21,7 +21,8 @@ def parser():
     sub = p.add_subparsers(dest='command', required=True)
     sub.add_parser('init', help='Initialize ignored personal data, without overwriting existing work.')
     sub.add_parser('doctor', help='Read-only health and prerequisite checks.')
-    sub.add_parser('status', help='List unfinished work without resuming it.')
+    status = sub.add_parser('status', help='List current unfinished work without resuming it.')
+    status.add_argument('--include-historical', action='store_true')
     c = sub.add_parser('context', help='Read current knowledge, system relationships, tasks and tools.')
     c.add_argument('--query', default='')
     c.add_argument('--repo')
@@ -48,7 +49,7 @@ def parser():
         x.add_argument('--repos', nargs='*', default=[])
         if command == 'memory':
             x.add_argument('--kind', choices=['learning', 'system', 'procedure', 'preference'], default='learning')
-            x.add_argument('--provenance', choices=['user-stated', 'source-verified', 'runtime-observed', 'inference'], default='user-stated')
+            x.add_argument('--provenance', choices=['user-stated', 'source-verified', 'runtime-observed', 'inference', 'historical-record'], default='user-stated')
         s.add_parser('list')
         x = s.add_parser('show')
         x.add_argument('id')
@@ -59,6 +60,7 @@ def parser():
         if command == 'memory':
             x = s.add_parser('review', help='Find changed sources and structural gaps; does not certify truth.')
             x.add_argument('--repo')
+            x.add_argument('--include-historical', action='store_true')
             x = s.add_parser('attest', help='After reviewing evidence, record source hashes and refresh the index.')
             x.add_argument('id')
             x.add_argument('--expected-revision', type=int, required=True)
@@ -79,6 +81,7 @@ def parser():
     x.add_argument('--profile', default='dev')
     x.add_argument('--execute', action='store_true')
     x.add_argument('--timeout', type=float, default=300)
+    x.add_argument('--stdin-file', type=Path, help='Explicit local input file for a noninteractive stdin consumer.')
 
     s = sub.add_parser('secrets', help='Enter values in your own terminal; never paste them into chat.').add_subparsers(dest='action', required=True)
     for action in ('setup', 'list', 'set', 'remove'):
@@ -112,7 +115,9 @@ def dispatch(args, tool_args):
         return result, 0 if result['ok'] else 1
     if command == 'status':
         records, warnings = ws.records('tasks')
-        return {'tasks': [{k: r[k] for k in ('id', 'title', 'status', 'summary', 'next_step', 'revision')} for r in records if r['status'] in {'active', 'waiting', 'unknown'}], 'warnings': warnings}, 0
+        unfinished = [r for r in records if r['status'] in {'active', 'waiting', 'unknown'}]
+        return {'tasks': [{k: r[k] for k in ('id', 'title', 'status', 'summary', 'next_step', 'revision')} for r in unfinished if args.include_historical or not r.get('historical')],
+                'historical_open_count': sum(bool(r.get('historical')) for r in unfinished), 'warnings': warnings}, 0
     if command == 'context':
         return memory.context(ws, args.query, args.repo, args.limit, args.budget), 0
     if command == 'repo':
@@ -140,7 +145,7 @@ def dispatch(args, tool_args):
             repo = ws.resolve_repo(args.repo) if args.repo else None
             if args.repo and not repo:
                 raise Error('Repository is not registered.')
-            return memory.review(ws, repo), 0
+            return memory.review(ws, repo, args.include_historical), 0
         if args.action == 'attest':
             return memory.checkpoint(ws, kind, args.id, args.expected_revision), 0
     if command == 'checkpoint':
@@ -153,7 +158,7 @@ def dispatch(args, tool_args):
         if args.action == 'register':
             return tooling.register(ws, read_json(args.file), args.replace), 0
         if args.action == 'run':
-            result = tooling.run(ws, args.id, tool_args, args.profile, args.execute, args.timeout)
+            result = tooling.run(ws, args.id, tool_args, args.profile, args.execute, args.timeout, args.stdin_file)
             return result, result['exit_code'] if result['exit_code'] >= 0 else 128 - result['exit_code']
     if command == 'secrets':
         if args.action == 'list':

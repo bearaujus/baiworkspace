@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import contextlib
 from pathlib import Path
 import shutil
 import subprocess
@@ -24,8 +25,12 @@ def validate(tool):
         if not isinstance(tool.get(key), str) or not tool[key].strip():
             raise Error(f'Tool manifest needs {key}.')
     relative(tool.get('entry'))
-    if tool.get('runtime') not in {'python', 'executable'} or tool.get('effects') not in EFFECTS:
+    if tool.get('runtime') not in {'python', 'executable', 'command'} or tool.get('effects') not in EFFECTS:
         raise Error('Tool needs a supported runtime and side-effect classification.')
+    if tool.get('cwd'):
+        relative(tool['cwd'])
+    if tool.get('runtime') == 'command' and '/' in tool['entry']:
+        raise Error('Command runtime entry must be a program name resolved through PATH.')
     for key in ('keywords', 'arguments', 'dependencies'):
         strings(tool, key)
     if tool.get('repo'):
@@ -35,6 +40,11 @@ def validate(tool):
     secrets = tool.get('secrets')
     if not isinstance(secrets, dict) or any(not KEY.fullmatch(k) or not isinstance(v, str) or not v for k, v in secrets.items()):
         raise Error('Tool secrets must map environment key names to descriptions, never values.')
+    environment = tool.get('environment', {})
+    if not isinstance(environment, dict) or any(not KEY.fullmatch(k) or not isinstance(v, str) for k, v in environment.items()):
+        raise Error('Tool environment must map key names to non-secret string settings.')
+    if set(environment) & set(secrets):
+        raise Error('Runtime settings and credential keys must be distinct.')
     return tool
 
 
@@ -59,9 +69,17 @@ def find(ws, query=''):
     from .memory import terms
     tools, warnings = manifests(ws)
     words = terms(query)
+    tasks, task_warnings = ws.records('tasks')
+    warnings.extend(task_warnings)
+    ongoing = query.strip().lower() in {'ongoing', 'ongoing work', 'current work', 'active', 'active tasks'}
+    matched_tasks = [t for t in tasks if not t.get('historical') and t['status'] in {'active', 'waiting'}
+                     and (ongoing or words & terms(t['title'] + ' ' + ' '.join(t['aliases'])))]
+    linked = {name for task in matched_tasks for name in task['tools']}
     ranked = sorted(tools, key=lambda t: (-len(words & terms(t['id'] + ' ' + t['description'] + ' ' + ' '.join(t['keywords']))), t['id']))
-    return {'tools': [{k: v for k, v in t.items() if k != '_base'} for t in ranked
-                      if not words or words & terms(t['id'] + ' ' + t['description'] + ' ' + ' '.join(t['keywords']))], 'warnings': warnings}
+    ranked.sort(key=lambda t: t['id'] not in linked)
+    return {'tools': [{**{k: v for k, v in t.items() if k != '_base'},
+                       'matched_tasks': [task['id'] for task in matched_tasks if t['id'] in task['tools']]}
+                      for t in ranked if t['id'] in linked or (not ongoing and (not words or words & terms(t['id'] + ' ' + t['description'] + ' ' + ' '.join(t['keywords']))))], 'warnings': warnings}
 
 
 def get(ws, name):
@@ -92,10 +110,19 @@ def register(ws, manifest, replace=False):
 
 def entry_path(ws, tool):
     base = ws.repo_path(tool['repo']) if tool.get('repo') else Path(tool['_base'])
-    path = contained(base, tool['entry'])
+    cwd = contained(base, tool['cwd']) if tool.get('cwd') else base
+    if not cwd.is_dir():
+        raise Error('Tool working directory is missing.')
+    if tool['runtime'] == 'command':
+        executable = shutil.which(tool['entry'])
+        if not executable:
+            raise Error('Tool command is unavailable on PATH.')
+        path = Path(executable)
+    else:
+        path = contained(base, tool['entry'])
     if not path.is_file():
         raise Error('Tool entry point is missing; inspect tools show before running.')
-    return base, path
+    return cwd, path
 
 
 def inspect_tool(ws, tool):
@@ -109,7 +136,8 @@ def inspect_tool(ws, tool):
             warnings.append(f'Tool {tool["id"]} needs executable {name}.')
     if tool.get('replaced_by'):
         warnings.append(f'Tool {tool["id"]} is retired; use {tool["replaced_by"]}.')
-    return {**{k: v for k, v in tool.items() if k != '_base'}, 'warnings': warnings}
+    return {**{k: v for k, v in tool.items() if k != '_base'}, 'warnings': warnings,
+            'invocation': [sys.executable, str(PROJECT / 'bai.py'), '--root', str(ws.root), 'tools', 'run', tool['id'], '--', '<tool arguments>']}
 
 
 def redact(text, secrets):
@@ -119,7 +147,7 @@ def redact(text, secrets):
     return text
 
 
-def run(ws, name, args, profile, execute=False, timeout=300):
+def run(ws, name, args, profile, execute=False, timeout=300, stdin_file=None):
     from .credentials import values
     tool = get(ws, name)
     if tool.get('replaced_by'):
@@ -140,13 +168,17 @@ def run(ws, name, args, profile, execute=False, timeout=300):
     allowed = {'PATH', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATHEXT', 'TEMP', 'TMP', 'TMPDIR', 'HOME', 'USERPROFILE',
                'APPDATA', 'LOCALAPPDATA', 'LANG', 'LC_ALL', 'TERM'}
     env = {k: v for k, v in os.environ.items() if k.upper() in allowed}
+    env.update(tool.get('environment', {}))
     env.update(secrets)
     env['PYTHONIOENCODING'] = 'utf-8'
     # Anonymous temporary streams prevent pipe deadlock and avoid unbounded RAM use.
     # They are private, unlinked on close, and never exposed as workspace artifacts.
-    with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
+    with contextlib.ExitStack() as stack:
+        stdout = stack.enter_context(tempfile.TemporaryFile())
+        stderr = stack.enter_context(tempfile.TemporaryFile())
+        stdin = stack.enter_context(Path(stdin_file).open('rb')) if stdin_file is not None else subprocess.DEVNULL
         try:
-            proc = subprocess.Popen(command, cwd=base, env=env, stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr, shell=False)
+            proc = subprocess.Popen(command, cwd=base, env=env, stdin=stdin, stdout=stdout, stderr=stderr, shell=False)
         except OSError as exc:
             raise Error('Tool could not start; check its runtime and entry point.') from exc
         outcome = 'finished'

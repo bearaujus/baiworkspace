@@ -13,7 +13,7 @@ import tempfile
 SCHEMA = 1
 STATES = {'active', 'waiting', 'complete', 'cancelled', 'superseded', 'unknown'}
 KINDS = {'learning', 'system', 'procedure', 'preference'}
-PROVENANCE = {'user-stated', 'source-verified', 'runtime-observed', 'inference'}
+PROVENANCE = {'user-stated', 'source-verified', 'runtime-observed', 'inference', 'historical-record'}
 ID = re.compile(r'[a-z0-9][a-z0-9-]{0,95}\Z')
 KEY = re.compile(r'[A-Za-z_][A-Za-z0-9_]*\Z')
 PRIVATE_NAMES = re.compile(r'(?i)(^\.env($|\.)|secret|credential|^id_(rsa|ed25519)$|\.pem$|\.key$)')
@@ -129,6 +129,10 @@ def validate_record(record, kind):
         strings(record, key)
     for repo in record['repos']:
         identity(repo)
+    if 'historical' in record and not isinstance(record['historical'], bool):
+        raise Error('historical must be a boolean.')
+    if 'origin' in record and not isinstance(record['origin'], dict):
+        raise Error('origin must be a provenance object.')
     if kind == 'tasks':
         if record.get('status') not in STATES:
             raise Error('Unknown task status.')
@@ -137,6 +141,9 @@ def validate_record(record, kind):
                 raise Error(f'Task needs text field {key}.')
         for key in ('tools', 'learnings', 'evidence'):
             strings(record, key)
+        if 'related_tasks' in record:
+            for task in strings(record, 'related_tasks'):
+                identity(task)
     else:
         if record.get('kind') not in KINDS or record.get('provenance') not in PROVENANCE:
             raise Error('Unknown memory kind or provenance.')
@@ -277,10 +284,10 @@ class Workspace:
             if any(r not in cfg['repositories'] for r in repos):
                 raise Error('Register repositories before referencing them.')
             record = {'schema_version': SCHEMA, 'id': name, 'title': title, 'revision': 1, 'updated': now(),
-                      'summary': 'Awaiting review.', 'repos': list(repos), 'aliases': [], 'reviewed': {}}
+                      'summary': 'Awaiting review.', 'repos': list(repos), 'aliases': [], 'reviewed': {}, 'historical': False, 'origin': {}}
             if kind == 'tasks':
                 record.update(status='active', scope='', verification='Not verified.', deployment='Not performed.',
-                              next_step='Establish scope and inspect current evidence.', reuse_decision='', tools=[], learnings=[], evidence=[])
+                              next_step='Establish scope and inspect current evidence.', reuse_decision='', tools=[], learnings=[], evidence=[], related_tasks=[])
             else:
                 record.update(kind=memory_kind, provenance=provenance, status='uncertain', sources=[], links=[], supersedes=[], relationships=[])
             validate_record(record, kind)
