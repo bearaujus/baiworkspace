@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "id": "csv-summary",
+  "description": "Summarize a UTF-8 CSV header and row count without exposing cell values.",
+  "keywords": ["csv", "input", "scope", "rows", "columns", "inventory"],
+  "runtime": "python",
+  "entry": "examples/tools/csv_summary.py",
+  "repo": null,
+  "arguments": [],
+  "dependencies": [],
+  "inputs": "One CSV path after --. Accepts a UTF-8 BOM; rows must match header width.",
+  "outputs": "JSON column names, row count and blank row count. Duplicate rows are preserved.",
+  "effects": "read-only",
+  "secrets": {},
+  "verification": "Unit tests cover BOM, duplicate rows and invalid row widths.",
+  "recovery": "Read-only. Correct the input format and rerun; original file is never changed."
+}

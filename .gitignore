@@ -1,0 +1,14 @@
+# Personal work is local, even when adding the entire public repository.
+/.bai/
+/backups/
+/.bai-backup-*/
+/.bai-restore-*/
+.env
+.env.*
+!.env.example
+__pycache__/
+*.py[cod]
+.venv/
+.DS_Store
+.idea/
+.vscode/

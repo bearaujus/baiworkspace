@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "id": "demo-service-check",
+  "description": "Offline example of a service readiness check with runtime credential injection.",
+  "keywords": ["service", "credentials", "readiness", "demo"],
+  "runtime": "python",
+  "entry": "examples/tools/demo_service_check.py",
+  "repo": null,
+  "arguments": [],
+  "dependencies": [],
+  "inputs": "DEMO_SERVICE_TOKEN in the selected profile; use a dummy value for this example.",
+  "outputs": "Configured status only. No network access or credential values.",
+  "effects": "read-only",
+  "secrets": {"DEMO_SERVICE_TOKEN": "Dummy token for the offline example; do not use a real service credential."},
+  "verification": "Run the unit tests, then run this tool with a dummy credential profile.",
+  "recovery": "No remote effects. If the key is missing, run secrets setup in your own terminal."
+}

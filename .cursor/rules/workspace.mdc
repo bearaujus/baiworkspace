@@ -1,0 +1,8 @@
+---
+description: Use the shared personal workspace and durable memory
+alwaysApply: true
+---
+
+Read AGENTS.md at the repository root before substantive work. Follow its context
+retrieval, tool reuse, credential and checkpoint workflow. Keep personal knowledge
+in .bai, not in this adapter.

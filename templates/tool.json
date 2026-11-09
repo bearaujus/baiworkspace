@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "id": "my-tool",
+  "description": "Replace with the specific reusable purpose.",
+  "keywords": ["replace-with-topic"],
+  "runtime": "python",
+  "entry": ".bai/tools/my-tool/main.py",
+  "repo": null,
+  "arguments": [],
+  "dependencies": [],
+  "inputs": "Describe arguments and expected input format.",
+  "outputs": "Describe stdout, artifacts and ordering guarantees.",
+  "effects": "read-only",
+  "secrets": {},
+  "verification": "Describe the exact offline verification command.",
+  "recovery": "Describe partial outcomes, retry safety and how to reconcile uncertainty."
+}
