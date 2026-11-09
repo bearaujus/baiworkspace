@@ -74,7 +74,7 @@ class MigrationWorkflowTests(unittest.TestCase):
         with patch('bai.tooling.shutil.which', return_value=sys.executable):
             result = tooling.run(self.ws, 'native', ['a b;literal'], 'dev', stdin_file=data)
         self.assertEqual(result['exit_code'], 0)
-        self.assertIn('native\noffline\nfixture input', result['stdout'])
+        self.assertEqual(result['stdout'].splitlines()[:3], ['native', 'offline', 'fixture input'])
         self.assertIn('a b;literal', result['stdout'])
 
     def test_task_declared_tools_and_learning_survive_vocabulary_mismatch(self):

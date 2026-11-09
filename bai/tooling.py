@@ -59,7 +59,7 @@ def manifests(ws):
                 if tool['id'] in seen:
                     raise Error('Duplicate tool identifier.')
                 seen.add(tool['id'])
-                result.append({**tool, '_path': str(path.relative_to(base)), '_base': str(base)})
+                result.append({**tool, '_path': path.relative_to(base).as_posix(), '_base': str(base)})
             except Error:
                 warnings.append(f'Invalid or duplicate tool manifest: {path.name}')
     return result, warnings

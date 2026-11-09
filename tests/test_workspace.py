@@ -337,6 +337,15 @@ class CredentialAndToolTests(Fixture):
         with self.assertRaises(Error):
             tooling.run(self.ws, 'test-tool', [], 'dev', execute=True)
 
+    def test_local_tool_updates_preserve_builtin_protection_on_native_paths(self):
+        manifest = self.tool()
+        manifest['description'] = 'Updated local tool contract'
+        tooling.register(self.ws, manifest, replace=True)
+        self.assertEqual(tooling.get(self.ws, 'test-tool')['description'], manifest['description'])
+        builtin = {k: v for k, v in tooling.get(self.ws, 'csv-summary').items() if not k.startswith('_')}
+        with self.assertRaises(Error):
+            tooling.register(self.ws, builtin, replace=True)
+
     def test_runner_timeout_reports_unknown_outcome(self):
         self.tool('import time\ntime.sleep(5)\n')
         result = tooling.run(self.ws, 'test-tool', [], 'dev', timeout=.05)
@@ -531,14 +540,14 @@ class ProjectTests(unittest.TestCase):
     def test_startup_adapters_and_budget(self):
         self.assertLess((PROJECT / 'AGENTS.md').stat().st_size, 6500)
         for name in ('CLAUDE.md', 'GEMINI.md', '.github/copilot-instructions.md', '.cursor/rules/workspace.mdc'):
-            self.assertIn('AGENTS.md', (PROJECT / name).read_text())
+            self.assertIn('AGENTS.md', (PROJECT / name).read_text(encoding='utf-8'))
 
     def test_public_docs_links_and_no_private_workspace_paths(self):
         import re
         for path in PROJECT.rglob('*.md'):
             if '.bai' in path.parts:
                 continue
-            text = path.read_text()
+            text = path.read_text(encoding='utf-8')
             self.assertNotIn('/Users/', text, path)
             self.assertNotIn('\u2014', text, path)
             for link in re.findall(r'\[[^\]]+\]\(([^)]+)\)', text):
@@ -547,8 +556,8 @@ class ProjectTests(unittest.TestCase):
 
     def test_tool_template_valid_and_personal_gitignore_present(self):
         tooling.validate(read_json(PROJECT / 'templates/tool.json'))
-        self.assertIn('/.bai/', (PROJECT / '.gitignore').read_text().splitlines())
-        self.assertIn('/backups/', (PROJECT / '.gitignore').read_text().splitlines())
+        self.assertIn('/.bai/', (PROJECT / '.gitignore').read_text(encoding='utf-8').splitlines())
+        self.assertIn('/backups/', (PROJECT / '.gitignore').read_text(encoding='utf-8').splitlines())
 
 
 if __name__ == '__main__':
