@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import contextlib
+from concurrent.futures import ThreadPoolExecutor
 import io
 import json
 import os
@@ -11,6 +12,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+from threading import Barrier
 import unittest
 from unittest.mock import patch
 import zipfile
@@ -80,6 +82,143 @@ class StorageTests(Fixture):
         self.ws.register_repo('ticket-api', other, rebind=True)
         self.assertEqual(self.ws.repo_path('ticket-api'), other.resolve())
         self.assertEqual(self.ws.require()['repositories']['ticket-api']['summary'], 'ticket-api service')
+
+    def test_repo_resolution_prefers_ids_and_reports_conflicting_aliases(self):
+        self.ws.register_repo('ticket-api', self.root, aliases=['service', 'policy-config'])
+        nested = self.root / 'policy'
+        nested.mkdir()
+        self.ws.register_repo('policy-config', nested, aliases=['service'])
+        self.assertEqual(self.ws.resolve_repo('POLICY-CONFIG'), 'policy-config')
+        with self.assertRaisesRegex(Error, 'ambiguous.*policy-config.*ticket-api'):
+            self.ws.resolve_repo('service')
+        self.assertEqual(self.ws.resolve_repo(nested / 'README.md'), 'policy-config')
+        with contextlib.chdir(self.root):
+            self.assertIsNone(self.ws.resolve_repo('wrong-repo'))
+            self.assertEqual(self.ws.resolve_repo('.'), 'ticket-api')
+            self.assertEqual(self.ws.resolve_repo('./policy'), 'policy-config')
+
+    def test_task_update_accepts_optional_fields_missing_from_v1_record(self):
+        task = self.task()
+        for key in ('related_tasks', 'historical', 'origin'):
+            task.pop(key)
+        write_json(self.ws.record_path('tasks', task['id']), task)
+        self.ws.create_topic('tickets', 'Ticketing', 'Maintain ticket request flow', ['ticket work'])
+        revised = self.ws.update('tasks', task['id'], {'topic': 'ticket work', 'aliases': ['repair tickets'],
+                                 'done_when': 'Confirm the response code.', 'waiting_on': 'user', 'status': 'waiting',
+                                 'related_tasks': [], 'historical': False, 'origin': {}}, 1)
+        self.assertEqual(revised['topic'], 'tickets')
+        self.assertEqual(revised['waiting_on'], 'user')
+        self.assertEqual(revised['done_when'], 'Confirm the response code.')
+        self.assertEqual(revised['revision'], 2)
+        self.assertEqual(read_json(self.ws.path('history/tasks-test-task-r1.json')), task)
+        with self.assertRaisesRegex(Error, 'waiting_on'):
+            self.ws.update('tasks', task['id'], {'waiting_on': 'agent'}, 2)
+        self.assertIsNone(self.ws.update('tasks', task['id'], {'topic': None}, 2)['topic'])
+
+    def test_task_update_retries_after_history_is_written(self):
+        task = self.task()
+        path = self.ws.record_path('tasks', task['id'])
+
+        def fail_record_write(target, record):
+            if target == path:
+                raise OSError('record update interrupted')
+            write_json(target, record)
+
+        change = {'summary': 'First reviewed decision'}
+        with patch('bai.core.write_json', side_effect=fail_record_write), self.assertRaises(OSError):
+            self.ws.update('tasks', task['id'], change, 1)
+        history = self.ws.path('history/tasks-test-task-r1.json')
+        self.assertEqual(read_json(history), task)
+        self.assertEqual(read_json(path), task)
+        with patch('bai.core.write_json', wraps=write_json) as writes:
+            revised = self.ws.update('tasks', task['id'], change, 1)
+        writes.assert_called_once_with(path, revised)
+        self.assertEqual(revised['revision'], 2)
+        with self.assertRaisesRegex(Error, 'Revision changed'):
+            self.ws.update('tasks', task['id'], change, 1)
+        atomic(self.ws.path('history/tasks-test-task-r2.json'), encoded(task))
+        with self.assertRaisesRegex(Error, 'history conflicts'):
+            self.ws.update('tasks', task['id'], {'summary': 'Conflicting history'}, 2)
+        self.assertEqual(read_json(path), revised)
+
+    def test_topic_cli_requires_current_open_set_and_reports_history(self):
+        self.repo('ticket-api')
+        self.repo('policy-config')
+        self.learning('ticket-requirements')
+
+        def call(*args):
+            code, output, error = self.cli(*args, '--json')
+            self.assertEqual(code, 0, error)
+            return json.loads(output)
+
+        topic = call('topic', 'add', 'tickets', '--title', 'Ticketing', '--purpose', 'Maintain ticketing',
+                     '--aliases', 'ticket service', '--reference-repos', 'policy-config',
+                     '--implementation-repos', 'ticket-api', '--requirements', 'ticket-requirements')
+        self.assertEqual(topic['reference_repos'], ['policy-config'])
+        self.assertEqual(topic['implementation_repos'], ['ticket-api'])
+        self.assertEqual(topic['requirements'], ['ticket-requirements'])
+        self.assertEqual(call('topic', 'list')['topics'], [topic])
+        initial = call('topic', 'show', 'ticket service')
+        self.assertEqual(initial['tasks'], [])
+        token = initial['open_set']
+        self.assertEqual(token, call('task', 'list', '--open', '--topic', 'tickets')['open_set'])
+
+        new_args = ('task', 'new', 'first-ticket', '--topic', 'ticket service', '--title', 'Fix ticket requests')
+        code, _, error = self.cli(*new_args, '--json')
+        self.assertEqual(code, 2)
+        self.assertIn('--expected-open-set', json.loads(error)['error'])
+        self.assertFalse(self.ws.path('tasks/first-ticket.md').exists())
+        created = call(*new_args, '--done-when', 'Verify the reply.', '--aliases', 'ticket outage',
+                       '--expected-open-set', token)
+        self.assertEqual(created['topic'], 'tickets')
+        self.assertEqual(created['aliases'], ['ticket outage'])
+        self.assertEqual(created['done_when'], 'Verify the reply.')
+        code, _, error = self.cli('task', 'new', 'second-ticket', '--title', 'Another ticket',
+                                  '--topic', 'tickets', '--expected-open-set', token, '--json')
+        self.assertEqual(code, 2)
+        conflict = json.loads(error)
+        self.assertIn('open task set changed', conflict['error'])
+        self.assertEqual(conflict['topic'], 'tickets')
+        self.assertEqual(conflict['candidate_count'], 1)
+        self.assertEqual(conflict['candidates'][0]['id'], created['id'])
+        self.assertEqual(conflict['candidates'][0]['done_when'], 'Verify the reply.')
+        self.assertFalse(self.ws.path('tasks/second-ticket.md').exists())
+        self.assertEqual(call('topic', 'show', 'tickets')['tasks'], [created])
+        self.ws.update('tasks', created['id'], {'status': 'complete'}, 1)
+        shown = call('topic', 'show', 'tickets', '--history')
+        self.assertEqual(shown['open_set'], token)
+        self.assertEqual(shown['tasks'], [])
+        self.assertEqual([task['id'] for task in shown['history']], [created['id']])
+
+        changes = self.ws.path('artifacts/topic-patch.json')
+        write_json(changes, {'purpose': 'Diagnose ticket requests', 'aliases': ['ticket work']})
+        revised = call('topic', 'update', 'ticket service', '--file', str(changes), '--expected-revision', '1')
+        self.assertEqual(call('topic', 'show', 'ticket work')['revision'], 2)
+        self.assertEqual(revised['purpose'], 'Diagnose ticket requests')
+        self.assertEqual(read_json(self.ws.path('history/topics-tickets-r1.json')), topic)
+
+    def test_simultaneous_guarded_task_creators_see_the_winner(self):
+        self.ws.create_topic('tickets', 'Ticketing', 'Maintain ticketing')
+        token = self.ws.open_set([], 'tickets')
+        barrier = Barrier(4)
+
+        def create(index):
+            barrier.wait(timeout=5)
+            return subprocess.run([sys.executable, '-B', str(PROJECT / 'bai.py'), '--root', str(self.root),
+                                   'task', 'new', f'ticket-{index}', '--title', f'Ticket repair {index}',
+                                   '--topic', 'tickets', '--expected-open-set', token, '--json'],
+                                  capture_output=True, text=True, timeout=10)
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            results = list(pool.map(create, range(4)))
+        self.assertEqual(sorted(r.returncode for r in results), [0, 2, 2, 2], results)
+        winner = next(json.loads(r.stdout) for r in results if r.returncode == 0)
+        records, warnings = self.ws.records('tasks')
+        self.assertEqual(records, [winner])
+        self.assertEqual(warnings, [])
+        for result in results:
+            if result.returncode == 2:
+                self.assertEqual(json.loads(result.stderr)['candidates'][0]['id'], winner['id'])
 
     def test_compare_and_swap_preserves_newer_decision(self):
         self.task()
@@ -167,8 +306,20 @@ class MemoryTests(Fixture):
         self.ws.update('knowledge', 'service-flow', {'status': 'current', 'sources': ['ticket-api:router.py']}, 1)
         memory.checkpoint(self.ws, 'knowledge', 'service-flow', 2)
         self.assertEqual(memory.review(self.ws)['findings'], [])
+
+        def result():
+            return next(e for e in memory.context(self.ws, 'service flow')['results'] if e['id'] == 'service-flow')
+
+        original = result()
+        self.assertNotIn('review_needed', original)
         (repo / 'router.py').write_text('version = 2\n')
         self.assertEqual(memory.review(self.ws)['findings'][0]['id'], 'service-flow')
+        changed = result()
+        self.assertIn('changed', changed['review_needed'])
+        self.assertEqual(changed['status'], 'current')
+        self.assertEqual(changed['provenance'], original['provenance'])
+        (repo / 'router.py').unlink()
+        self.assertIn('unavailable', result()['review_needed'])
 
     def test_metadata_and_narrative_changes_are_detected(self):
         self.task()
@@ -187,6 +338,24 @@ class MemoryTests(Fixture):
         self.ws.update('tasks', 'test-task', {'scope': 'Read-only inspection', 'reuse_decision': 'New script because existing tool does not fit.', 'tools': ['missing']}, 1)
         with self.assertRaises(Error):
             memory.checkpoint(self.ws, 'tasks', 'test-task', 2)
+
+    def test_checkpoint_cli_reports_committed_revision_when_postcommit_steps_fail(self):
+        task = self.task()
+        self.ws.update('tasks', task['id'], {'scope': 'Read-only inspection',
+                       'reuse_decision': 'No script required.'}, 1)
+        self.ws.path('cache/index.json').mkdir()
+        with patch('bai.memory.review', side_effect=OSError('review unavailable')):
+            code, output, error = self.cli('checkpoint', task['id'], '--expected-revision', '2', '--json')
+        self.assertEqual(code, 0, error)
+        result = json.loads(output)
+        self.assertEqual(result['revision'], 3)
+        self.assertTrue(result['checkpointed'])
+        self.assertFalse(result['cache_refreshed'])
+        self.assertFalse(result['memory_review_completed'])
+        self.assertEqual(len(result['warnings']), 2)
+        current = self.ws.record('tasks', task['id'])
+        self.assertEqual(current['revision'], 3)
+        self.assertEqual(current['reviewed'], memory.review_hashes(self.ws, 'tasks', current))
 
     def test_context_never_reads_credentials_raw_artifacts_or_history(self):
         self.set_secret()
@@ -408,6 +577,15 @@ class BackupTests(Fixture):
             self.assertIn('private/secrets.json', z.namelist())
             self.assertNotIn('cache/unused.json', z.namelist())
             self.assertNotIn('write.lock', z.namelist())
+
+    def test_snapshot_roundtrip_preserves_topics_and_task_membership(self):
+        topic = self.ws.create_topic('tickets', 'Ticketing', 'Maintain ticketing')
+        task = self.ws.create('tasks', 'ticket-check', 'Check ticket requests', topic='tickets',
+                              expected_open_set=self.ws.open_set([], 'tickets'))
+        restored = Workspace(self.base / 'restored')
+        backup.unpack(self.plain(), restored.data)
+        self.assertEqual(restored.record('topics', 'tickets'), topic)
+        self.assertEqual(restored.record('tasks', task['id']), task)
 
     def test_unpack_rejects_checksum_corruption(self):
         archive = self.plain()

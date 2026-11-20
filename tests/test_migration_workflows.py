@@ -116,6 +116,74 @@ class MigrationWorkflowTests(unittest.TestCase):
             found = next(t for t in result['tools'] if t['id'] == 'csv-summary')
             self.assertEqual(found['matched_tasks'], ['access-review'])
 
+    def test_resume_routes_generic_phrases_to_unfinished_work(self):
+        self.ws.create('tasks', 'shipment', 'Reconcile shipments')
+        self.ws.update('tasks', 'shipment', {'status': 'waiting', 'next_step': 'Obtain receipt.'}, 1)
+        self.ws.create('tasks', 'history', 'Previous work')
+        self.ws.update('tasks', 'history', {'historical': True}, 1)
+        self.ws.create('tasks', 'finished', 'Finish work')
+        self.ws.update('tasks', 'finished', {'status': 'complete'}, 1)
+        for query in ('continue', 'Continue yesterday’s work.', 'What is waiting on me?',
+                      'What were we working on?', 'Use the scope I gave you last time.'):
+            with self.subTest(query=query):
+                output = io.StringIO()
+                with patch('sys.stdout', output):
+                    code = main(['--root', str(self.ws.root), 'context', '--query', query, '--json'])
+                self.assertEqual(code, 0)
+                packet = json.loads(output.getvalue())
+                self.assertEqual(packet['resume'], {'candidate_count': 1, 'needs_choice': False})
+                self.assertEqual([item['id'] for item in packet['results']], ['shipment'])
+                self.assertEqual(packet['results'][0]['next_step'], 'Obtain receipt.')
+        self.ws.create('tasks', 'ledger', 'Audit ledger')
+        packet = memory.context(self.ws, 'continue')
+        self.assertEqual(packet['resume'], {'candidate_count': 2, 'needs_choice': True})
+        self.assertEqual([item['id'] for item in packet['results'][:2]], ['ledger', 'shipment'])
+        packet = memory.context(self.ws, 'What’s waiting on me?')
+        self.assertEqual([item['id'] for item in packet['results']], ['shipment'])
+
+    def test_resume_follows_link_to_latest_handoff_and_current_scope(self):
+        self.ws.create('tasks', 'shipment', 'Reconcile outbound shipments')
+        self.ws.update('tasks', 'shipment', {'status': 'waiting'}, 1)
+        self.ws.create('tasks', 'receipt', 'Review receipt')
+        self.ws.update('tasks', 'receipt', {
+            'related_tasks': ['shipment'], 'scope': 'Only include the tangerine batch.',
+            'next_step': 'Obtain the pallet receipt.',
+        }, 1)
+        self.ws.create('tasks', 'ledger', 'Audit ledger')
+        self.ws.path('tasks/ledger.md').write_text('Also discussed shipments.', encoding='utf-8')
+        for query in ('continue outbound shipments', 'tangerine', 'pallet'):
+            with self.subTest(query=query):
+                packet = memory.context(self.ws, query)
+                task = packet['results'][0]
+                self.assertEqual(task['id'], 'receipt')
+                self.assertEqual(task['scope'], 'Only include the tangerine batch.')
+                self.assertEqual(task['related_tasks'], ['shipment'])
+                self.assertTrue(task['updated'])
+        self.assertFalse(memory.context(self.ws, 'continue outbound shipments')['resume']['needs_choice'])
+        self.assertEqual(memory.context(self.ws, 'continue')['resume']['candidate_count'], 2)
+
+    def test_leading_map_and_linked_memory_fit_before_repo_briefs(self):
+        repos = [f'shipping-service-{i:02}' for i in range(22)]
+        for name in repos:
+            self.ws.register_repo(name, self.ws.root)
+        self.ws.create('knowledge', 'routing', 'Shipment routing', repos, memory_kind='system')
+        self.ws.update('knowledge', 'routing', {'links': ['handling']}, 1)
+        self.ws.create('knowledge', 'handling', 'Handling procedure', memory_kind='procedure')
+        packet = memory.context(self.ws, 'shipment routing', budget=2000)
+        self.assertEqual([item['id'] for item in packet['results'][:2]], ['routing', 'handling'])
+        self.assertLess(len(packet['related_repositories']), len(repos))
+        self.assertLessEqual(len(json.dumps(packet, ensure_ascii=False, indent=2)) + 1, 2000)
+
+    def test_tool_word_forms_and_aliases_match_in_both_searches(self):
+        manifest = {k: v for k, v in tooling.get(self.ws, 'csv-summary').items() if not k.startswith('_')}
+        manifest.update(id='app-check', description='Run app checks.', keywords=['verify', 'tests'],
+                        aliases=['preflight'])
+        tooling.register(self.ws, manifest)
+        for query in ('test', 'tests', 'verify', 'verification', 'preflight'):
+            with self.subTest(query=query):
+                self.assertIn('app-check', [t['id'] for t in tooling.find(self.ws, query)['tools']])
+                self.assertIn('app-check', [e['id'] for e in memory.context(self.ws, query)['results']])
+
 
 if __name__ == '__main__':
     unittest.main()

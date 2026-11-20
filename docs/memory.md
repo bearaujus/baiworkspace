@@ -8,7 +8,7 @@ credentials, raw artifacts and historical snapshots. There is no embedding servi
 
 | Location under `.bai/` | Purpose |
 | --- | --- |
-| `workspace.json` | Portable repository IDs, aliases and summaries |
+| `workspace.json` | Portable repository IDs, aliases and summaries, plus the optional topic registry |
 | `bindings.json` | Machine-specific repository paths |
 | `preferences.md` | Durable user working preferences |
 | `repos/` | Short repository briefs |
@@ -81,6 +81,11 @@ identity, revision and review-hash edits. Unknown update fields are rejected.
 Tasks have status (`active`, `waiting`, `complete`, `cancelled`, `superseded`,
 `unknown`), scope, verification, deployment, next step, reuse decision, tools,
 learnings and evidence descriptions. `learnings` contains related memory IDs.
+Optional task fields include `topic`, `done_when` and `waiting_on`. Use plain text
+for `done_when`. When a task is waiting, record `user` for a needed user decision
+or action, `external` for a dependency outside the user's control, or `unknown`
+when responsibility is unclear. Earlier records may omit these fields. Task aliases
+help a new chat find the same handoff using the user's terminology.
 
 Memories have kind (`learning`, `system`, `procedure`, `preference`), status
 (`current`, `uncertain`, `superseded`), provenance, sources, related `links`,
@@ -90,6 +95,41 @@ in the memory's repo IDs. Provenance is `user-stated`, `source-verified`,
 
 Use `uncertain` for unresolved claims. Describe verification limits in the narrative.
 A structural check cannot establish truth, current deployment or authorization.
+
+## Group recurring work into topics
+
+A topic gives related tasks a stable name, purpose, repository roles and requirement
+references. Store durable requirements in memory, where their sources, provenance
+and review state can be maintained. Use repository IDs for the reference and
+implementation roles. The roles describe where to read and where changes usually
+belong. Verify the current scope and authorization before acting.
+
+```sh
+python3 bai.py topic add ticketing --title "Ticketing" --purpose "Maintain ticket request flow" --aliases "ticket service" --reference-repos policy-config --implementation-repos ticket-api --requirements request-flow
+python3 bai.py topic show "ticket service" --json
+python3 bai.py topic show ticketing --history --json
+```
+
+`topic show` includes current open tasks and an `open_set` token. `--history` adds
+closed and historical tasks. Topics and task membership are optional in existing
+workspaces. To group an existing task, patch its `topic` with the topic ID or alias
+using `task update`. Use `null` to clear membership. To revise topic metadata, use
+`topic update ticketing --file <patch.json> --expected-revision <revision>` with
+the revision from `topic show`.
+
+Check open work first and reuse a matching task. When the request needs a new task,
+pass the observed token from `topic show`, `task list --open --topic <id>` or a
+brief for the same topic.
+
+```sh
+python3 bai.py task new 2026-11-20-ticket-timeout --title "Investigate request timeouts" --topic ticketing --done-when "Reproduce the timeout and verify the service behavior" --expected-open-set "TOKEN_FROM_TOPIC_SHOW"
+```
+
+The token covers the current open task IDs and revisions for that topic, including
+an empty set. If it changes, the CLI reports the number of open candidates and up
+to five matches. Review those tasks before deciding whether to create a task.
+Ungrouped tasks can use the global token from `task list --open` or an unscoped
+brief when they need the same check.
 
 ## Correct and review
 
@@ -104,11 +144,16 @@ changes and scope corrections. `memory review --repo <id>` reports changed sourc
 hashes, changed narratives, missing links, incomplete maps and possible alias
 overlap. The agent reads the evidence and decides what changes are warranted.
 Attestation records that review; it never upgrades provenance or certainty itself.
+Context flags a retrieved current memory with `review_needed` when its evidence
+changed, is unavailable or has yet to be reviewed. Inspect the cited evidence
+before relying on that memory.
 
-`checkpoint` validates a task's declared scope/reuse choice, stamps its narrative
-and metadata hashes, and refreshes the derived index. It also reports memory review
-findings. Context builds from current records even when the cache is missing or
-stale. Invalid individual records are reported instead of hiding all valid work.
+`checkpoint` validates a task's declared scope and reuse choice, stamps its narrative
+and metadata hashes, and returns the committed revision. It also tries to refresh
+the derived index and run a memory review. A failure in either follow-up appears as
+a warning on the successful checkpoint, so use the returned revision for later edits.
+Context builds from current records even when the cache is missing or stale. Invalid
+individual records are reported alongside valid work.
 
 The workspace uses a short-lived write lock and expected record revisions. If a
 process crashes, verify it has stopped before manually removing `.bai/write.lock`.

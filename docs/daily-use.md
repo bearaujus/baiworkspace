@@ -65,6 +65,33 @@ verification artifacts in `.bai/artifacts/`, with explicit source references.
 
 ## Interrupted work and partial outcomes
 
+Start with a brief for the user's request. A repository hint can narrow the
+search. A named topic follows its task and repository bindings across checkouts.
+Use `--topic` to select that topic directly.
+
+```sh
+python3 bai.py context --brief --query "Can we pick up the damaged import?" --json
+python3 bai.py context --brief --topic document-import --json
+python3 bai.py context --brief --query "What’s waiting on me?" --json
+```
+
+The brief defaults to 4,000 characters. `--limit` caps the total result rows and
+`--budget` accepts a character budget of at least 2,000. Check `omitted`,
+`truncated` and `warning_count` and follow the cited records when details are
+needed. Reuse a complete brief for follow-up questions about recorded status,
+verification and ownership. Repository IDs identify the checkouts. `topic show
+<id>` provides the full repository roles and saved requirement references when
+the brief omits them. Review any requirement marked `review_needed` before
+relying on it.
+
+Waiting queries retain separate open outcomes even when the tasks are linked.
+Recorded user actions appear first, followed by external waits and waits whose
+owner is unknown. On older handoffs, `waiting_on_inferred` identifies the saved
+text used to infer an owner. Read each relevant next step, scope, completion
+condition and verification before resuming. When a continuation reports
+`resume.needs_choice`, confirm which outcome the user wants to pick up.
+Use `status` to see the full list when the brief omits candidates.
+
 Keep successful, failed, unsubmitted and uncertain operations distinct. A timeout
 can happen after a server accepted a request. Tools should supply a read-back or
 reconciliation procedure; agents should not retry external writes blindly. The

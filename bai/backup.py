@@ -166,6 +166,9 @@ def unpack(source, staging):
     staged_ws = Workspace(staging.parent)
     staged_ws.data = staging
     staged_ws.require()
+    _, invalid_topics = staged_ws.records('topics')
+    if invalid_topics:
+        raise Error('Invalid restored topic metadata.')
     from .credentials import store
     from .tooling import validate
     store(staged_ws)

@@ -80,8 +80,8 @@ data is never overwritten. External application repos are not included.
 ```sh
 python3 bai.py init
 python3 bai.py doctor
-python3 bai.py status
-python3 bai.py context --query "service request flow" --json
+python3 bai.py status --brief
+python3 bai.py context --brief --query "service request flow" --json
 python3 bai.py tools find "CSV"
 python3 bai.py memory review
 python3 bai.py --help

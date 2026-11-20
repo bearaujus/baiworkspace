@@ -33,6 +33,8 @@ def validate(tool):
         raise Error('Command runtime entry must be a program name resolved through PATH.')
     for key in ('keywords', 'arguments', 'dependencies'):
         strings(tool, key)
+    if 'aliases' in tool:
+        strings(tool, 'aliases')
     if tool.get('repo'):
         identity(tool['repo'])
     if tool.get('replaced_by'):
@@ -65,6 +67,11 @@ def manifests(ws):
     return result, warnings
 
 
+def search_terms(tool):
+    from .memory import terms
+    return terms(' '.join([tool['id'], tool['description'], *tool['keywords'], *tool.get('aliases', [])]))
+
+
 def find(ws, query=''):
     from .memory import terms
     tools, warnings = manifests(ws)
@@ -75,11 +82,11 @@ def find(ws, query=''):
     matched_tasks = [t for t in tasks if not t.get('historical') and t['status'] in {'active', 'waiting'}
                      and (ongoing or words & terms(t['title'] + ' ' + ' '.join(t['aliases'])))]
     linked = {name for task in matched_tasks for name in task['tools']}
-    ranked = sorted(tools, key=lambda t: (-len(words & terms(t['id'] + ' ' + t['description'] + ' ' + ' '.join(t['keywords']))), t['id']))
-    ranked.sort(key=lambda t: t['id'] not in linked)
+    matches = {t['id']: len(words & search_terms(t)) for t in tools}
+    ranked = sorted(tools, key=lambda t: (t['id'] not in linked, -matches[t['id']], t['id']))
     return {'tools': [{**{k: v for k, v in t.items() if k != '_base'},
                        'matched_tasks': [task['id'] for task in matched_tasks if t['id'] in task['tools']]}
-                      for t in ranked if t['id'] in linked or (not ongoing and (not words or words & terms(t['id'] + ' ' + t['description'] + ' ' + ' '.join(t['keywords']))))], 'warnings': warnings}
+                      for t in ranked if t['id'] in linked or (not ongoing and (not words or matches[t['id']]))], 'warnings': warnings}
 
 
 def get(ws, name):

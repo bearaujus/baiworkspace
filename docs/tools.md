@@ -26,6 +26,8 @@ inputs/outputs, effects, required credential key descriptions, verification and
 recovery. Values never belong in the `secrets` mapping. A `repo` ID resolves the
 entry relative to a registered external repo; otherwise it is clone-relative.
 Built-in examples are framework-relative and cannot be shadowed by local tools.
+Optional `aliases` list alternate search phrases. Both `tools find` and `context`
+match common word forms such as `test` and `tests` or `verify` and `verification`.
 
 For native commands such as Go or Make, use `runtime: "command"`, `entry: "go"`
 and an argument array such as `["run", ".", "--dry-run"]`. The executable is
