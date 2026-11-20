@@ -35,7 +35,8 @@ run `status --brief` and reply without resuming old work. Collect repo paths whe
    list or authorization is dated evidence, not current proof or permission.
 4. Use `tools find` and `tools show` before creating a script. Reuse or extend a
    compatible tool. For new tools, explain the gap and register its manifest.
-5. Implement the authorized task and run checks appropriate to the actual change.
+5. Implement and verify the authorized task. Follow
+   [Git delivery](CONTRIBUTING.md#git-delivery) for commits, pushes and PRs.
    Keep local work, tests, deployment and runtime verification distinct. For a
    partial external failure, reconcile current state before retrying a mutation.
 6. Review durable learning and checkpoint meaningful work before handing back.
